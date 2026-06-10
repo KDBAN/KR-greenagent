@@ -233,8 +233,45 @@ with st.expander("⚙️ 2단계: 사업장별 배출시설 정의 (명세서 3-
         target_org_idx = st.selectbox("📍 배출시설을 등록할 사업장을 선택하세요:", options=list(org_options.keys()), format_func=lambda x: org_options[x])
         selected_org = st.session_state["workplace_list"][target_org_idx]
         
-        t2_1, t2_2, t2_3 = st.tabs(["📂 AI 도면 업로드", "✂️ AI 화면 캡처", "✍️ 수동 직접 입력"])
+        # 💡 [핵심] 엑셀 대량 업로드 탭 추가! (총 4개 탭)
+        t2_1, t2_2, t2_3, t2_4 = st.tabs(["📊 엑셀 대량 업로드", "📂 AI 도면 업로드", "✂️ AI 화면 캡처", "✍️ 수동 직접 입력"])
         
+        # --- 1) 엑셀 대량 업로드 로직 ---
+        with t2_1:
+            st.info("💡 가지고 계신 '배출시설 관리대장(엑셀)'을 올리면 한 번에 시설이 등록됩니다. (권장 컬럼: 배출시설코드, 배출시설명, 자체시설명)")
+            excel_file = st.file_uploader("📊 배출시설 엑셀/CSV 파일 올리기", type=['xlsx', 'xls', 'csv'])
+            
+            if excel_file:
+                if st.button("🚀 엑셀 데이터로 시설 대량 등록", type="primary", use_container_width=True):
+                    try:
+                        # 엑셀/CSV 읽기
+                        if excel_file.name.endswith('.csv'):
+                            df_fac = pd.read_csv(excel_file)
+                        else:
+                            df_fac = pd.read_excel(excel_file)
+                        
+                        # 데이터프레임의 각 줄을 순회하며 리스트에 추가
+                        added_count = 0
+                        for _, row in df_fac.iterrows():
+                            # 엑셀의 컬럼명이 달라도 대충 맞춰서 가져오게 방어 로직 (컬럼이 없으면 빈칸)
+                            f_code = str(row.get('배출시설코드', row.get('코드', '')))
+                            f_name = str(row.get('배출시설명', row.get('시설명', '')))
+                            f_subname = str(row.get('자체시설명', row.get('설비명', '')))
+                            
+                            # 빈 줄이 아니면 추가
+                            if f_code != 'nan' and f_name != 'nan':
+                                st.session_state["facility_list"].append({
+                                    "회사명": selected_org["회사명"], "사업장명": selected_org["사업장명"],
+                                    "배출시설코드": f_code.strip(), "배출시설명": f_name.strip(), "자체시설명": f_subname.strip()
+                                })
+                                added_count += 1
+                        
+                        st.success(f"🎉 총 {added_count}개의 배출시설이 성공적으로 일괄 등록되었습니다!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"엑셀 판독 중 오류가 발생했습니다: {e}")
+
+        # --- 2) 기존 AI 도면 업로드 ---
         sys_prompt_2 = "[SYSTEM COMMAND] 배출시설 맵핑 AI입니다."
         init_prompt_2 = f"""
         이 도면/현황판은 '{selected_org["회사명"]}' 회사의 '{selected_org["사업장명"]}' 사업장 자료야.
@@ -247,7 +284,6 @@ with st.expander("⚙️ 2단계: 사업장별 배출시설 정의 (명세서 3-
         ]
         ```
         """
-
         def process_step2(b64_list):
             st.session_state["msg_step2"] = []
             with st.spinner(f"🤖 {selected_org['사업장명']}의 배출시설을 파악 중입니다..."):
@@ -260,29 +296,29 @@ with st.expander("⚙️ 2단계: 사업장별 배출시설 정의 (명세서 3-
                         st.session_state["facility_list"].append(f)
                     st.rerun()
 
-        with t2_1:
+        with t2_2:
             col3, col4 = st.columns([3, 1])
-            with col3: up2 = st.file_uploader("📂 시설도면 / 설비대장 올리기", type=['pdf', 'jpg', 'jpeg', 'png'], accept_multiple_files=True, key="u2")
+            with col3: up2 = st.file_uploader("📂 시설도면 / 설비대장 사진 올리기", type=['pdf', 'jpg', 'jpeg', 'png'], accept_multiple_files=True, key="u2")
             with col4:
                 st.markdown("<br><br>", unsafe_allow_html=True)
                 if st.button("🚀 2단계 배출시설 AI 추출", type="primary", use_container_width=True):
                     b64_list = convert_multiple_files_to_image_bytes(up2) if up2 else None
                     if b64_list: process_step2(b64_list)
                     
-        with t2_2:
+        with t2_3:
             st.info("💡 윈도우 캡처 후 아래 버튼을 누르세요.")
             if st.button("📋 캡처본 배출시설 AI 추출", type="primary", key="btn_c2"):
                 b64_list = get_clipboard_image_bytes_list()
                 if b64_list: process_step2(b64_list)
                 else: st.error("⚠️ 클립보드에 이미지가 없습니다!")
                 
-        with t2_3:
+        with t2_4:
             with st.form("manual_facility"):
                 st.write("도면 없이 키보드로 [배출시설명]을 직접 등록합니다.")
                 col_f1, col_f2, col_f3 = st.columns(3)
                 f_code = col_f1.text_input("배출시설코드 (예: 0055)")
                 f_name = col_f2.text_input("배출시설명 (예: 일반 보일러시설)")
-                f_subname = col_f3.text_input("자체시설명 (예: 비상발전기)")
+                f_subname = col_f3.text_input("자체시설명 (예: 온수보일러)")
                 if st.form_submit_button("✍️ 배출시설 수동 추가", type="primary"):
                     if f_code and f_name:
                         st.session_state["facility_list"].append({
