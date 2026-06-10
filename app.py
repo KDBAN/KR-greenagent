@@ -48,9 +48,6 @@ def save_to_google_sheets(data_dict):
         return True
     except Exception as e: return False
 
-# ==========================================
-# 🔐 로그인 및 기본 UI 세팅
-# ==========================================
 st.set_page_config(page_title="KR-GreenAgent", page_icon="🏭", layout="wide")
 
 if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
@@ -89,6 +86,14 @@ if st.sidebar.button("로그아웃"):
 
 st.title("🏭 KR-GreenAgent 클라우드 통합 플랫폼")
 
+# 💡 [핵심] 이미지를 최적화(Resizing)하여 OpenAI 토큰 한도를 초과하지 않게 만드는 함수
+def optimize_image(img):
+    # 가로 세로 중 긴 쪽을 1024px로 맞춰서 비율 유지 축소 (용량 대폭 감소, 글자는 잘 보임)
+    max_size = 1024
+    if max(img.size) > max_size:
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    return img
+
 def convert_multiple_files_to_image_bytes(uploaded_files):
     all_image_bytes = []
     if not isinstance(uploaded_files, list): uploaded_files = [uploaded_files]
@@ -96,17 +101,22 @@ def convert_multiple_files_to_image_bytes(uploaded_files):
         for file in uploaded_files:
             if file.name.lower().endswith('.pdf'):
                 pdf_document = fitz.open(stream=file.read(), filetype="pdf")
-                for page_num in range(len(pdf_document)):
+                # 토큰 초과 방지: PDF가 너무 길면 최대 5장까지만 읽도록 제한
+                max_pages = min(len(pdf_document), 5) 
+                for page_num in range(max_pages):
                     page = pdf_document.load_page(page_num)
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) 
+                    # 해상도 매트릭스 축소 (2 -> 1.5)
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5)) 
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    img = optimize_image(img) # 이미지 사이즈 최적화
                     buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=95)
+                    img.save(buf, format="JPEG", quality=85) # 퀄리티 85로 압축
                     all_image_bytes.append(base64.b64encode(buf.getvalue()).decode('utf-8'))
             else:
                 img = Image.open(file).convert("RGB")
+                img = optimize_image(img) # 이미지 사이즈 최적화
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=95)
+                img.save(buf, format="JPEG", quality=85) # 퀄리티 85로 압축
                 all_image_bytes.append(base64.b64encode(buf.getvalue()).decode('utf-8'))
         return all_image_bytes
     except Exception as e:
@@ -120,8 +130,9 @@ def get_clipboard_image_bytes_list():
         if img is None: return []
         if isinstance(img, list): img = Image.open(img[0])
         if img.mode != "RGB": img = img.convert("RGB")
+        img = optimize_image(img) # 이미지 사이즈 최적화
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95)
+        img.save(buf, format="JPEG", quality=85)
         return [base64.b64encode(buf.getvalue()).decode('utf-8')]
     except: return []
 
@@ -178,7 +189,7 @@ with st.expander("🏢 1단계: 사업장 및 하위 배출시설 조직경계 A
         st.session_state["messages_step1"] = []
         try:
             st.session_state["image_context_step1"] = b64_img_list
-            with st.spinner(f"🤖 총 {len(b64_img_list)}페이지의 문서(조직도 등)를 계층 분석 중입니다..."):
+            with st.spinner(f"🤖 총 {len(b64_img_list)}페이지의 문서를 분석 중입니다..."):
                 ai_msg = run_ai_vision_multi(b64_img_list, sys_prompt_1, init_prompt_1)
                 workplaces = extract_workplace_list(ai_msg)
                 if workplaces: st.session_state["workplace_list"] = workplaces
@@ -220,12 +231,13 @@ with st.expander("🏢 1단계: 사업장 및 하위 배출시설 조직경계 A
                 reply = client.chat.completions.create(model="gpt-4o", messages=api_messages, temperature=0.0).choices[0].message.content
                 
                 new_workplaces = extract_workplace_list(reply)
-                if new_workplaces: st.session_state["workplace_list"] = new_workplaces
+                if new_workplaces: 
+                    st.session_state["workplace_list"] = new_workplaces 
                 
                 display_msg = re.sub(r"WORKPLACE_LIST:\s*(.+)", "", reply).strip()
                 st.session_state["messages_step1"].append({"role": "assistant", "content": display_msg})
                 st.session_state["boundary_context"] = display_msg
-                st.rerun()
+                st.rerun() 
 
 # ==========================================
 # 📂 2단계: 증빙자료 판독 및 산정
@@ -235,7 +247,6 @@ with st.expander("📂 2단계: 증빙서류 AI 사진(Vision) 판독 및 계층
     if st.session_state["boundary_context"]: st.success("🔗 1단계 계층 조직경계 연동 완료! (드롭다운에서 배정할 부서/공정을 선택하세요)")
     else: st.warning("⚠️ 1단계 조직경계 미설정")
         
-    # 💡 갱신 버튼과 드롭다운 배치
     col_drop1, col_drop2 = st.columns([4, 1])
     with col_drop1:
         options = st.session_state["workplace_list"] if st.session_state["workplace_list"] else ["[본사] 일반", "[공장] 일반 (직접입력)"]
