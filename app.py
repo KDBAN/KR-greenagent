@@ -291,3 +291,54 @@ with st.expander("📂 2단계: 활동자료 전표 입력 (증빙 판독)", exp
             else:
                 st.error("⚠️ 증빙 원본 파일이 없습니다.")
 
+# ==========================================
+# 🗄️ 3단계: 내 인벤토리 명세서 종합 관리 (DB 연동)
+# ==========================================
+st.markdown("<br>", unsafe_allow_html=True)
+with st.expander("🗄️ 3단계: 내 인벤토리 명세서 DB (구글 시트 연동 및 엑셀 다운로드)", expanded=False):
+    st.title("🗄️ 온실가스 인벤토리(명세서) 통합 DB")
+    st.markdown(f"1, 2단계를 거쳐 **구글 클라우드 시트**에 실시간으로 적재된 최종 명세서 데이터입니다.")
+    
+    col_db1, col_db2 = st.columns([4, 1])
+    with col_db2:
+        # 버튼을 누르면 구글 시트에서 최신 데이터를 싹 긁어옵니다.
+        if st.button("🔄 최신 DB 데이터 불러오기", use_container_width=True, key="fetch_db"):
+            with st.spinner("구글 시트에서 데이터를 가져오는 중..."):
+                try:
+                    creds = get_gcp_credentials()
+                    gc = gspread.authorize(creds)
+                    sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
+                    # 시트의 모든 데이터를 리스트로 가져오기
+                    all_data = sheet.get_all_records()
+                    st.session_state["cloud_db_data"] = all_data
+                    st.success("✅ 최신 데이터를 불러왔습니다.")
+                except Exception as e:
+                    st.error("데이터를 불러오지 못했습니다. (권한 또는 연결 오류)")
+    
+    if "cloud_db_data" in st.session_state and st.session_state["cloud_db_data"]:
+        # 판다스 데이터프레임으로 예쁘게 엑셀처럼 보여줌
+        df_cloud = pd.DataFrame(st.session_state["cloud_db_data"])
+        st.dataframe(df_cloud, use_container_width=True)
+        
+        # 종합 대시보드 요약 (배출량 tCO2eq 합산)
+        st.markdown("### 📊 배출량 요약 대시보드")
+        try:
+            # 엑셀에 적힌 문자를 숫자로 강제 변환 후 합산
+            total_emission = pd.to_numeric(df_cloud["배출량(tCO2eq)"], errors='coerce').sum()
+            colA, colB = st.columns(2)
+            colA.metric(label="누적 배출량 합계", value=f"{total_emission:,.2f} tCO2eq")
+            colB.metric(label="총 등록된 전표 건수", value=f"{len(df_cloud)} 건")
+        except:
+            st.info("합계를 계산할 데이터가 부족합니다.")
+        
+        # 💡 [핵심] CSV(엑셀) 다운로드 버튼
+        csv = df_cloud.to_csv(index=False).encode('utf-8-sig') # 한글 깨짐 방지 utf-8-sig
+        st.download_button(
+            label="📥 인벤토리 명세서 전체 다운로드 (Excel/CSV)",
+            data=csv,
+            file_name=f"KR_GreenAgent_Inventory_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            type="primary"
+        )
+    else:
+        st.info("💡 우측 상단의 [🔄 최신 DB 데이터 불러오기] 버튼을 눌러주세요.")
